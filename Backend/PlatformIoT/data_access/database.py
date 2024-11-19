@@ -5,13 +5,14 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-
 database_url = os.getenv("DATABASE_URL")
+
 if not database_url:
     raise ValueError("DATABASE_URL is not set in the environment variables")
 
+# Convert thành async URL
 SQLALCHEMY_DATABASE_URL = database_url.replace("postgresql://", "postgresql+asyncpg://")
-
+print(f"Converted SQLALCHEMY_DATABASE_URL: {SQLALCHEMY_DATABASE_URL}")  
 async_engine = create_async_engine(
     SQLALCHEMY_DATABASE_URL,
     echo=True,

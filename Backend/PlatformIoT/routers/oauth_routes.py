@@ -1,22 +1,22 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from .database import get_db, async_engine
-from .models import Base, User, OAuthClient, OAuthAuthorization, OAuthToken
-from .schemas import UserModel, ClientRegister, TokenRequest
-from .auth import hash_password, verify_password, create_access_token
+from ..data_access.database import get_db, async_engine
+from ..models.models import Base, User, OAuthClient, OAuthAuthorization, OAuthToken
+from ..models.schemas import UserModel, ClientRegister, TokenRequest
+from ..auth import hashing , token
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-app = FastAPI()
+router = APIRouter()
 
-# create metadata
-@app.on_event("startup")
+
+@router.on_event("startup")
 async def startup():
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-@app.post("/register-user")
+@router.post("/register-user")
 async def create_user(user: UserModel, db: AsyncSession = Depends(get_db)):
     query = select(User).where(User.email == user.email)
     result = await db.execute(query)
@@ -24,7 +24,7 @@ async def create_user(user: UserModel, db: AsyncSession = Depends(get_db)):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    hashed_password = hash_password(user.password)
+    hashed_password = hashing.hash_password(user.password)
     db_user = User(username=user.username, email=user.email, password=hashed_password)
     db.add(db_user)
     await db.commit()
@@ -37,7 +37,7 @@ async def create_user(user: UserModel, db: AsyncSession = Depends(get_db)):
         "update_at": db_user.updated_at
     }
 
-@app.post("/register-client")
+@router.post("/register-client")
 async def create_client(client: ClientRegister, db: AsyncSession = Depends(get_db)):
     db_client = OAuthClient(
         client_id=client.client_id,
@@ -50,7 +50,7 @@ async def create_client(client: ClientRegister, db: AsyncSession = Depends(get_d
     await db.refresh(db_client)
     return {"client_id": db_client.client_id}
 
-@app.post("/authorize")
+@router.post("/authorize")
 async def create_authorization_code(username: str, client_id: str, db: AsyncSession = Depends(get_db)):
     user_query = select(User).where(User.username == username)
     user_result = await db.execute(user_query)
@@ -78,7 +78,7 @@ async def create_authorization_code(username: str, client_id: str, db: AsyncSess
 
     return {"authorization_code": authorization_code, "expires_at": expires_at.isoformat()}
 
-@app.post("/token")
+@router.post("/token")
 async def generate_token(client: TokenRequest, db: AsyncSession = Depends(get_db)):
     auth_query = select(OAuthAuthorization).where(OAuthAuthorization.authorization_code == client.authorization_code)
     auth_result = await db.execute(auth_query)
@@ -88,7 +88,7 @@ async def generate_token(client: TokenRequest, db: AsyncSession = Depends(get_db
     user_result = await db.execute(user_query)
     db_user = user_result.scalars().first()
 
-    if not db_user or not verify_password(client.password, db_user.password):
+    if not db_user or not hashing.verify_password(client.password, db_user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
@@ -112,7 +112,7 @@ async def generate_token(client: TokenRequest, db: AsyncSession = Depends(get_db
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid client credentials"
         )
 
-    access_token = create_access_token(data={"sub": db_user.username})
+    access_token = token.create_access_token(data={"sub": db_user.username})
     refresh_token = str(uuid4())
     expires_in = datetime.utcnow() + timedelta(minutes=30)
 
@@ -127,10 +127,8 @@ async def generate_token(client: TokenRequest, db: AsyncSession = Depends(get_db
     db.add(db_token)
     await db.commit()
     await db.refresh(db_token)
-
     await db.delete(db_authorization)
     await db.commit()
-
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
